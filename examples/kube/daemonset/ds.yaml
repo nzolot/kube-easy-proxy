@@ -1,0 +1,115 @@
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: easy-proxy
+  labels:
+    name: easy-proxy
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    name: easy-proxy
+  ports:
+    - name: tcp-80
+      protocol: TCP
+      port: 80
+      targetPort: 80
+      nodePort: 30378
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: easy-proxy
+spec:
+  selector:
+    matchLabels:
+      name: easy-proxy
+  template:
+    metadata:
+      labels:
+        name: easy-proxy
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/lb: "true"
+      tolerations:
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/lb
+          value: "true"
+      containers:
+      - name: proxy
+        image: nzolot/kube-easy-proxy:1.0.2
+        imagePullPolicy: Always
+        env:
+        - name: PROXY_PROTOCOL
+          value: "http"
+        - name: PROXY_PORTS
+          value: "80"
+        - name: PROXY_TARGET
+          value: "http://testpod-nginx.testns-nginx.svc.cluster.local"
+        - name: STATUS_PORT
+          value: "8888"
+#        - name: WHITELIST
+#          value: "1.1.1.1/32"
+        ports:
+          - containerPort: 80
+            name: es-1
+            protocol: TCP
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+#           By default, proxy has an endpoint on :80/status. Port can be changed by setting STATUS_PORT env
+            path: /kubeprobe
+            port: 8888
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        readinessProbe:
+          failureThreshold: 10
+          httpGet:
+            path: /kubeprobe
+            port: 8888
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          requests:
+            memory: "16Mi"
+            cpu: "25m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: easy-proxy
+spec:
+  policyTypes:
+    - Egress
+    - Ingress
+  podSelector:
+    matchLabels:
+      name: easy-proxy
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: "1.1.1.1/32"
+  egress:
+    - to:
+      ports:
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: testns-nginx
+          podSelector:
+            matchLabels:
+              name: testpod-nginx
